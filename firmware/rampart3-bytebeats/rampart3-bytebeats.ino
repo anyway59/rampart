@@ -9,7 +9,7 @@
    Many contributions from the internet :) See nyblybyte.h for many equations origins and original form.
 */
 
-
+#include <EEPROM.h>
 #include <EncoderButton.h>
 // for pwm init functions
 const unsigned int TOP = 0x07FF; // 11-bit resolution.  7812 Hz PWM
@@ -27,20 +27,39 @@ uint16_t lastpotvalue[3]; // old pot readings
 #define LEDPIN   13 // usually 13
 #define PWMPIN 11
 
+#include <SSD1306Ascii.h>
+#include <SSD1306AsciiAvrI2c.h>
+#include <SSD1306init.h>
+#define I2C_ADDRESS 0x3C
+SSD1306AsciiAvrI2c display;
+
+
+
 long t = 0;
-volatile int a, b, c, i, offA, offB, offC;
+volatile int a, b, c, i, offA, offB;
 volatile int result;
 int d = 0; // hmm?
 
-int prog = 1;
-int bank = 1;
-int pb1 = 1;
-int pb1total = 18;
-int pb2 = 1;
-int pb2total = 28;
-int pb3 = 1;
-int pb3total = 20;
-int numProg = 67;
+int freqmod = 0;
+
+bool awaitingSync = true;
+bool acceptEncoder = false;
+
+byte prog = 1;
+byte bank = 1;
+
+byte pb1total = 18;
+
+byte pb2total = 18;
+
+byte pb3total = 16;
+
+byte pb4total = 7;
+
+byte bb_sound = 1;
+
+byte numSounds = (pb1total + pb2total + pb3total + pb4total);
+bool bb_running = false;
 
 // these ranges are provisional and in schollz equations need to be reset
 volatile int aMax = 99, aMin = 0, bMax = 99, bMin = 0, cMax = 99, cMin = 0;
@@ -83,11 +102,34 @@ long timeoffset = 0;
    handle encoder button long press event
 */
 void onEb1LongPress(EncoderButton& eb) {
+  if (bb_running) {
+    cli();
+    bb_running = false;
+  }
+  else {
+    pwmSetup();
+    bb_running = true;
+    EEPROM.write(0, bb_sound);
+    if (debug) {
+    Serial.print("Saving bb_sound to EEPROM: ");
+    Serial.println(bb_sound);
+    }
+  }
 
   if (debug) {
     Serial.print("button1 longPressCount: ");
     Serial.println(eb.longPressCount());
   }
+  // set which bank to select formulas from
+  /*
+  bank = ((bank + 1) % 3) + 1;
+
+  if (debug) {
+    Serial.print("New bank: ");
+    Serial.println(bank);
+  }
+  */
+
 }
 /**
    handle encoder turn with  button pressed
@@ -108,93 +150,84 @@ void onEb1PressTurn(EncoderButton& eb) {
   }
 }
 
+
+
 /**
    handle encoder turn with  button pressed
 */
 void onEb1Clicked(EncoderButton& eb) {
 
-  // set which bank to select formulas from
-  bank = eb.clickCount();
 
   if (debug) {
-    Serial.print("bank: ");
+    Serial.print("click count: ");
     Serial.println(eb.clickCount());
   }
   // displayUpdate();
 }
 
 /**
+    handle right button long press
+*/
+void onRightLongPress(EncoderButton& right) { 
+
+  if (debug) {
+    Serial.println("Right button longPress");
+    }
+    // set which bank to select formulas from
+ 
+  //bank = bank + 1;
+  //if (bank > 3) {bank = 1;}
+
+  //displaySound();
+ }
+
+ /**
+    handle left button long press
+*/
+void onLeftLongPress(EncoderButton& left) { 
+
+    // set which bank to select formulas from
+   if (debug) {
+    Serial.println("Left button longPress");
+    } 
+  //bank = bank - 1;
+  //if (bank < 1) {bank = 3;}
+
+  //displaySound();
+  }
+
+/**
     handle left button short release
 */
 void onLeftReleased(EncoderButton& left) {
+  
+   if (debug) {
+    Serial.println("Left button released");
+    } 
+ 
 
-  if (bank == 1)
-  {
-    if (pb1 > 1) {
-      pb1--;
-    } else if (pb1 == 1) {
-      pb1 = pb1total;
-    }
-    prog = pb1;
-  } 
-  else if (bank == 2) {
-    if (pb2 > 1) {
-      pb2--;
-    } else if (pb2 == 1) {
-      pb2 = pb2total;
-    }
-    prog = pb2;
-  } 
-  else if (bank == 3) {
-    if (pb3 > 1) {
-      pb3--;
-    } else if (pb3 == 1) {
-      pb3 = pb3total;
-    }
-    prog = pb3;
-  }
 
-  if (debug) {
-    Serial.print("PROGRAM: ");
-    Serial.println(prog);
-  }
+  //displaySound();
 }
+
+
+
+
 
 /**
     handle right button short release
 */
 void onRightReleased(EncoderButton& right) {
-  
-  if (bank == 1)
-  {
-    if (pb1 < pb1total) {
-      pb1++;
-    } else if (pb1 == pb1total) {
-      pb1 = 1;
-    }
-    prog = pb1;
-  } 
-  else if (bank == 2) {
-    if (pb2 < pb2total) {
-      pb2++;
-    } else if (pb2 == pb2total) {
-      pb2 = 1;
-    }
-    prog = pb2;
-  } 
-  else if (bank == 3) {
-    if (pb3 < pb2total) {
-      pb3++;
-    } else if (pb3 == pb3total) {
-      pb3 = 1;
-    }
-    prog = pb3;
-  }
-  if (debug) {
-    Serial.print("PROGRAM: ");
-    Serial.println(prog);
-  }
+
+    if (debug) {
+    Serial.println("Right button released");
+    } 
+
+
 }
+
+
+
 
 /**
    A function to handle the 'encoder' event without button
@@ -203,6 +236,39 @@ void onEb1Encoder(EncoderButton& eb) {
 
   //displayUpdate();
   encoder_delta = eb.increment();
+  if (debug) {
+    Serial.print("eb1 incremented by: ");
+    Serial.println(encoder_delta);
+    //Serial.print("eb1 position is: ");
+    //Serial.println(SRATE);
+  }
+  int newbb_sound = bb_sound;
+  if (acceptEncoder) {
+    
+    if (encoder_delta < 0 ) {
+    newbb_sound = bb_sound - 1;
+    if (newbb_sound < 1) {
+        newbb_sound = numSounds;
+       }
+       acceptEncoder = false;
+     }  
+     else
+    {
+      newbb_sound = bb_sound + 1; 
+       if (newbb_sound > numSounds) {
+       newbb_sound = 1;
+       } 
+    } 
+  }
+  else
+  {
+    acceptEncoder = true;
+  }
+
+  bb_sound = newbb_sound;
+  calculateProgAndBank();
+
+  /*
   long cstep = eb.increment() * 64;
   long oSRATE = SRATE;
   SRATE = SRATE + cstep;
@@ -210,19 +276,24 @@ void onEb1Encoder(EncoderButton& eb) {
   if (SRATE != oSRATE) {
     OCR1A = F_CPU / SRATE;
   }
+  */
+   if ( bb_running ) {
+    EEPROM.write(0, bb_sound);
+    if (debug) {
+    Serial.print("Saving bb_sound to EEPROM: ");
+    Serial.println(bb_sound);
+    }
+   }
 
-  if (debug) {
-    Serial.print("eb1 incremented by: ");
-    Serial.println(eb.increment());
-    Serial.print("eb1 position is: ");
-    Serial.println(SRATE);
-  }
+
+  displaySound();
 }
 
 // values to compare input on CV pins
 int lastA = 0;
 int lastB = 0;
 int lastC = 0;
+
 
 void setup() {
 
@@ -231,6 +302,28 @@ void setup() {
     Serial.println(F("Started"));
   }
 
+ display.begin(&Adafruit128x64, I2C_ADDRESS);
+ display.setFont(Adafruit5x7);
+ display.clear();
+    
+ display.set2X();
+ display.println("");
+ display.println("Welcome to");
+ display.println("BYTEBEATS");
+ delay(3000);
+ display.clear();
+
+ byte savedsound = EEPROM.read(0);
+ if(debug) { 
+      Serial.print("Retrieved selection from EEPROM: ");
+      Serial.print(savedsound);
+ }
+ if ((savedsound > 0) && (savedsound <= numSounds)) {
+  bb_sound = savedsound;
+ }
+
+ 
+
   pinMode(LEDPIN, OUTPUT);
   pinMode(PWMPIN, OUTPUT);
   
@@ -238,19 +331,71 @@ void setup() {
   //lastB =  analogRead(A6);
   //lastC =  analogRead(A7);
   
-  pwmSetup();
+  //pwmSetup();
 
   //Link the event(s) to your function
   eb1.setClickHandler(onEb1Clicked);
   eb1.setEncoderHandler(onEb1Encoder);
   eb1.setLongPressHandler(onEb1LongPress, true);
+
+
   eb1.setEncoderPressedHandler(onEb1PressTurn);
 
   // program up/down buttons
   left.setReleasedHandler(onLeftReleased);
+  left.setLongPressHandler(onLeftLongPress, true);
+
   left.setRateLimit(7);
   right.setReleasedHandler(onRightReleased);
+  right.setLongPressHandler(onRightLongPress, true);
   right.setRateLimit(6);
+  eb1.setRateLimit(6);
+
+  calculateProgAndBank();
+
+  displaySound();
+
+}
+
+void displaySound() {
+
+  delay(1000);
+  display.setCursor(0,0); 
+  display.print("BANK: ");
+  display.print(bank);
+  display.println("  ");
+  display.print("PROG: ");
+  display.print(prog);
+  display.println("  ");
+
+}
+
+void calculateProgAndBank() {
+  if ( bb_sound < 1)   {
+    bank = 1;
+    prog = 1;
+  }
+  else if ( bb_sound < (pb1total + 1)  ) {
+    bank = 1;
+    prog = bb_sound;
+  }
+  else if (  bb_sound < (pb1total + pb2total + 1)  )  {
+    bank = 2;
+    prog = bb_sound - pb1total;
+  }
+  else if (  bb_sound < (pb1total + pb2total + pb3total + 1)  )  {
+    bank = 3;
+    prog = bb_sound - (pb1total + pb2total);
+  } 
+  else if (  bb_sound < (pb1total + pb2total + pb3total + pb4total + 1)  )  {
+    bank = 4;
+    prog = bb_sound - (pb1total + pb2total + pb3total);
+  }
+  else {
+    bank = 1;
+    prog = 1;
+  }
+
 
 }
 
@@ -283,6 +428,7 @@ void loop() {
   adc();
   knobs();
 
+
   
 }
 
@@ -296,24 +442,28 @@ void adc() {
   uint16_t B =  map(readcv(1), 0, 1023, aMin, aMax);
   uint16_t C =  map(readcv(2), 0, 1023, aMin, aMax);
   
-    if (abs(lastA - A) > 1) {
+    if (lastA != A) {
       lastA = A;
       offA = lastA / 2;
-      Serial.println(A);
-
+      if(debug) Serial.print("A: ");
+      if(debug) Serial.println(a);
     }
 
-    if (abs(lastB - B) > 1) {
+    if (lastB != B) {
       lastB = B;
       offB = lastB / 2;
-
+      if(debug) Serial.print("B: ");
+      if(debug) Serial.println(b);
     }
 
-    if (abs(lastC - C) > 1) {
+    if (lastC != C) {
       lastC = C;
-      offC = lastC / 2 ;
-
+      //offC = lastC / 2 ;
+      //if(debug) Serial.print("C: ");
+      //if(debug) Serial.println(c);
     }
+
+
 
 }
 
@@ -337,7 +487,42 @@ uint16_t readcv(uint8_t potnum) {
  
   if (abs(lastpotvalue[potnum] - val) > MIN_COUNTS ) { 
     lastpotvalue[potnum] = val; // even if pot is unlocked, make sure pot has moved at least MIN_COUNT counts so values don't jump around
-  }  else {
+
+    if(debug) { 
+     if (potnum != 2)  {
+      Serial.print("pot ");
+      Serial.print(potnum);
+      Serial.print(" readcv: ");
+      Serial.println(val); 
+     }
+    }
+    if (potnum == 2)  {        
+        if (val > 80) {
+          if (awaitingSync ) {
+            // sync event
+            freqmod = (( freqmod+1) % 8);
+            OCR1A = F_CPU / (SRATE - (freqmod * 200));
+            if ((freqmod%2) == 0) { t = 0; }
+            enc_offset = (freqmod % 7) + 1;
+            if ((freqmod % 7) == 0) { enc_offset = enc_offset * -1;}
+            if ((freqmod%3) == 0) {offB = 50*freqmod;}
+
+
+            
+
+            //if(debug) { 
+            //Serial.print("sync? : ");
+            //Serial.println(val);
+            //}
+          }
+          awaitingSync = false;
+        }
+        else {
+          awaitingSync = true;
+        }
+      }
+
+    }  else {
     val = lastpotvalue[potnum];
   }
     
@@ -350,7 +535,7 @@ uint16_t readcv(uint8_t potnum) {
 void knobs() {
   a = map(analogRead(A0), 0, 1023, aMin, aMax) + offA;
   b = map(analogRead(A1), 0, 1023, bMin, bMax) + offB;
-  c = map(analogRead(A2), 0, 1023, cMin, cMax) + offC;
+  c = map(analogRead(A2), 0, 1023, cMin, cMax);
 }
 
 
